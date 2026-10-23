@@ -1,278 +1,249 @@
 import 'package:flutter/material.dart';
+import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const TaskApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class TaskApp extends StatelessWidget {
+  const TaskApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'IT 126 Registration Form',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
-      ),
-      home: const RegistrationScreen(),
+      title: 'Local Task Manager',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: const TaskScreen(),
     );
   }
 }
 
-class RegistrationScreen extends StatefulWidget {
-  const RegistrationScreen({super.key});
 
-  @override
-  State<RegistrationScreen> createState() => _RegistrationScreenState();
+Future<Database> openTaskDatabase() async {
+  final databasePath = await getDatabasesPath();
+  final path = join(databasePath, 'tasks.db');
+  return openDatabase(
+    path,
+    version: 1,
+    onCreate: (db, version) async {
+      await db.execute('''
+        CREATE TABLE tasks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          is_completed INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+    },
+  );
 }
 
-class _RegistrationScreenState extends State<RegistrationScreen> {
-  final _formKey = GlobalKey<FormState>();
+Future<int> addTask(Database db, String title) {
+  return db.insert('tasks', {'title': title});
+}
 
-  // Text Controllers
-  final TextEditingController _firstNameController = TextEditingController();
-  final TextEditingController _lastNameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController = TextEditingController();
+Future<List<Map<String, Object?>>> getTasks(Database db) {
+  return db.query('tasks', orderBy: 'id DESC');
+}
 
-  // State variables
-  bool _isPasswordObscured = true;
-  bool _isConfirmPasswordObscured = true;
-  bool _isFormValid = false;
+Future<int> completeTask(Database db, int id) {
+  return db.update(
+    'tasks',
+    {'is_completed': 1},
+    where: 'id = ?',
+    whereArgs: [id],
+  );
+}
+
+Future<int> deleteTask(Database db, int id) {
+  return db.delete(
+    'tasks',
+    where: 'id = ?',
+    whereArgs: [id],
+  );
+}
+
+
+class TaskRepository {
+  final Database database;
+  TaskRepository(this.database);
+
+  Future<int> create(String title) => addTask(database, title);
+  Future<List<Map<String, Object?>>> getAll() => getTasks(database);
+  Future<int> markCompleted(int id) => completeTask(database, id);
+  Future<int> delete(int id) => deleteTask(database, id);
+}
+
+
+class TaskScreen extends StatefulWidget {
+  const TaskScreen({Key? key}) : super(key: key);
 
   @override
-  void dispose() {
-    _firstNameController.dispose();
-    _lastNameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    _confirmPasswordController.dispose();
-    super.dispose();
+  State<TaskScreen> createState() => _TaskScreenState();
+}
+
+class _TaskScreenState extends State<TaskScreen> {
+  Database? _db;
+  TaskRepository? _repository;
+  List<Map<String, Object?>> _tasks = [];
+  final TextEditingController _controller = TextEditingController();
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _initDatabase();
   }
 
-  // Check form validity dynamically
-  void _validateForm() {
-    final isValid = _formKey.currentState?.validate() ?? false;
-    if (isValid != _isFormValid) {
+  Future<void> _initDatabase() async {
+    try {
+      final db = await openTaskDatabase();
+      final repo = TaskRepository(db);
       setState(() {
-        _isFormValid = isValid;
+        _db = db;
+        _repository = repo;
       });
-    }
-  }
-
-  // Handle Form Submission
-  void _submitForm() {
-    if (_formKey.currentState!.validate()) {
-      final firstName = _firstNameController.text.trim();
-      final lastName = _lastNameController.text.trim();
-      final email = _emailController.text.trim();
-
-      // Show Success Result using Dialog
-      showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            title: const Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.green),
-                SizedBox(width: 8),
-                Text('Registration Successful'),
-              ],
-            ),
-            content: SingleChildScrollView(
-              child: ListBody(
-                children: [
-                  Text('First Name: $firstName'),
-                  const SizedBox(height: 6),
-                  Text('Last Name: $lastName'),
-                  const SizedBox(height: 6),
-                  Text('Email: $email'),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  _clearForm();
-                },
-                child: const Text('OK'),
-              ),
-            ],
-          );
-        },
+      await _loadTasks();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error initializing database: $e')),
       );
     }
   }
 
-  // Clear all text fields
-  void _clearForm() {
-    _formKey.currentState?.reset();
-    _firstNameController.clear();
-    _lastNameController.clear();
-    _emailController.clear();
-    _passwordController.clear();
-    _confirmPasswordController.clear();
-    setState(() {
-      _isFormValid = false;
-    });
+  Future<void> _loadTasks() async {
+    if (_repository == null) return;
+    setState(() => _isLoading = true);
+    try {
+      final tasks = await _repository!.getAll();
+      setState(() {
+        _tasks = tasks;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading tasks: $e')),
+      );
+    }
+  }
+
+  Future<void> _addNewTask() async {
+    final title = _controller.text.trim();
+    if (title.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Task title cannot be empty or whitespace-only.')),
+      );
+      return;
+    }
+
+    try {
+      await _repository!.create(title);
+      _controller.clear();
+      await _loadTasks();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to add task: $e')),
+      );
+    }
+  }
+
+  Future<void> _completeTask(int id) async {
+    try {
+      await _repository!.markCompleted(id);
+      await _loadTasks();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update task: $e')),
+      );
+    }
+  }
+
+  Future<void> _deleteTask(int id) async {
+    try {
+      await _repository!.delete(id);
+      await _loadTasks();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to delete task: $e')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // GestureDetector handles unfocusing the keyboard when tapping outside
-    return GestureDetector(
-      onTap: () => FocusScope.of(context).unfocus(),
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Registration Form'),
-          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        ),
-        // SingleChildScrollView prevents bottom overflow when keyboard opens
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.all(16.0),
-          child: Form(
-            key: _formKey,
-            onChanged: _validateForm,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Local Task Manager (SQLite)'),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Row(
               children: [
-                // First Name Field
-                TextFormField(
-                  controller: _firstNameController,
-                  decoration: const InputDecoration(
-                    labelText: 'First Name',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.person),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Please enter your first name';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Last Name Field
-                TextFormField(
-                  controller: _lastNameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Last Name',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.person_outline),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Please enter your last name';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Email Field
-                TextFormField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: 'Email',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.email),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Please enter your email';
-                    }
-                    final emailRegExp = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
-                    if (!emailRegExp.hasMatch(value.trim())) {
-                      return 'Please enter a valid email address';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Password Field
-                TextFormField(
-                  controller: _passwordController,
-                  obscureText: _isPasswordObscured,
-                  decoration: InputDecoration(
-                    labelText: 'Password',
-                    border: const OutlineInputBorder(),
-                    prefixIcon: const Icon(Icons.lock),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _isPasswordObscured ? Icons.visibility_off : Icons.visibility,
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _isPasswordObscured = !_isPasswordObscured;
-                        });
-                      },
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    decoration: const InputDecoration(
+                      labelText: 'Enter task title',
+                      border: OutlineInputBorder(),
                     ),
                   ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter a password';
-                    }
-                    if (value.length < 6) {
-                      return 'Password must be at least 6 characters long';
-                    }
-                    return null;
-                  },
                 ),
-                const SizedBox(height: 16),
-
-                // Confirm Password Field
-                TextFormField(
-                  controller: _confirmPasswordController,
-                  obscureText: _isConfirmPasswordObscured,
-                  decoration: InputDecoration(
-                    labelText: 'Confirm Password',
-                    border: const OutlineInputBorder(),
-                    prefixIcon: const Icon(Icons.lock_outline),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _isConfirmPasswordObscured ? Icons.visibility_off : Icons.visibility,
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _isConfirmPasswordObscured = !_isConfirmPasswordObscured;
-                        });
-                      },
-                    ),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please confirm your password';
-                    }
-                    if (value != _passwordController.text) {
-                      return 'Passwords do not match';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 24),
-
-                // Register Button (Disabled when form is invalid)
+                const SizedBox(width: 10),
                 ElevatedButton(
-                  onPressed: _isFormValid ? _submitForm : null,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16.0),
-                  ),
-                  child: const Text(
-                    'Register',
-                    style: TextStyle(fontSize: 16),
-                  ),
+                  onPressed: _addNewTask,
+                  child: const Text('Add Task'),
                 ),
               ],
             ),
           ),
-        ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _tasks.isEmpty
+                    ? const Center(child: Text('No tasks found.'))
+                    : ListView.builder(
+                        itemCount: _tasks.length,
+                        itemBuilder: (context, index) {
+                          final task = _tasks[index];
+                          final id = task['id'] as int;
+                          final title = task['title'] as String;
+                          final isCompleted = (task['is_completed'] as int) == 1;
+
+                          return ListTile(
+                            title: Text(
+                              title,
+                              style: TextStyle(
+                                decoration: isCompleted
+                                    ? TextDecoration.lineThrough
+                                    : TextDecoration.none,
+                              ),
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Checkbox(
+                                  value: isCompleted,
+                                  onChanged: (val) {
+                                    if (!isCompleted) {
+                                      _completeTask(id);
+                                    }
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.red),
+                                  onPressed: () => _deleteTask(id),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
       ),
     );
   }
