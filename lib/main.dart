@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:path/path.dart';
+import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 void main() {
@@ -19,10 +19,9 @@ class TaskApp extends StatelessWidget {
   }
 }
 
-
 Future<Database> openTaskDatabase() async {
   final databasePath = await getDatabasesPath();
-  final path = join(databasePath, 'tasks.db');
+  final path = p.join(databasePath, 'tasks.db');
   return openDatabase(
     path,
     version: 1,
@@ -63,7 +62,6 @@ Future<int> deleteTask(Database db, int id) {
   );
 }
 
-
 class TaskRepository {
   final Database database;
   TaskRepository(this.database);
@@ -73,7 +71,6 @@ class TaskRepository {
   Future<int> markCompleted(int id) => completeTask(database, id);
   Future<int> delete(int id) => deleteTask(database, id);
 }
-
 
 class TaskScreen extends StatefulWidget {
   const TaskScreen({Key? key}) : super(key: key);
@@ -106,6 +103,7 @@ class _TaskScreenState extends State<TaskScreen> {
       await _loadTasks();
     } catch (e) {
       setState(() => _isLoading = false);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error initializing database: $e')),
       );
@@ -123,6 +121,7 @@ class _TaskScreenState extends State<TaskScreen> {
       });
     } catch (e) {
       setState(() => _isLoading = false);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error loading tasks: $e')),
       );
